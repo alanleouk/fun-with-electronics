@@ -1,0 +1,9 @@
+{
+    "[cpp]": {
+      "editor.formatOnSave": true,
+    },
+    "cSpell.words": [
+      "IRAM"
+    ],
+  }
+  
