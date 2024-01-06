@@ -10,6 +10,17 @@ const char *ntpServer = "pool.ntp.org";
 const long gmtOffset_sec = 3600;
 const int daylightOffset_sec = 3600;
 
+const bool debugMode = false;
+
+char timeLength = 8;
+char timeBuffer[12] = "00:00:00";
+
+char dateLength = 11;
+char dateBuffer[12] = "01 Jan 2024";
+
+unsigned long timeUpdatePeriod = 43200000;
+unsigned long lastTimeUpdate = 0;
+
 // ESP32-WROOM
 #define TFT_DC 12   // A0
 #define TFT_CS 13   // CS
@@ -38,75 +49,97 @@ ST7735_YELLOW ST77XX_YELLOW
 ST7735_ORANGE ST77XX_ORANGE
 */
 
-void writeLocalTime();
+void updateTimeBuffer();
 void printLocalTime();
+void writeDisplay();
+void updateTime();
 
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_MOSI, TFT_CLK, TFT_RST);
 
-void writeLocalTime()
+void updateTimeBuffer()
 {
-  tft.setTextWrap(true);
-  tft.fillScreen(ST77XX_BLACK);
-  tft.setCursor(0, 30);
-  tft.setTextColor(ST77XX_RED);
-  tft.setTextSize(3);
-
-  struct tm timeInfo;
-  char buffer[12];
-
-  int length = 0;
-  if (!getLocalTime(&timeInfo))
+  if (!debugMode)
   {
-    length = sprintf(buffer, "Failed");
-  }
-  else
-  {
-    char buffer[12];
-    // length = sprintf(buffer, "%H:%M:%S", &timeInfo);
-    length = strftime(buffer, 12, "%H:%M:%S", &timeInfo);
-  }
+    struct tm timeInfo;
 
-  for (int i = 0; i < length; i++)
-  {
-    tft.print(buffer[i]);
-    delay(100);
+    if (!getLocalTime(&timeInfo))
+    {
+      timeLength = sprintf(timeBuffer, "00:00:00");
+      dateLength = sprintf(dateBuffer, "ERROR");
+    }
+    else
+    {
+      timeLength = strftime(timeBuffer, 12, "%H:%M:%S", &timeInfo);
+      dateLength = strftime(dateBuffer, 12, "%d %b %Y", &timeInfo);
+    }
   }
 }
 
-void printLocalTime()
+void writeDisplay()
 {
-  struct tm timeInfo;
-  if (!getLocalTime(&timeInfo))
+  tft.setTextSize(3);
+  tft.setTextColor(ST77XX_RED, ST77XX_BLACK);
+  tft.setCursor(10, 10);
+  for (int i = 0; i < timeLength; i++)
   {
-    Serial.println("Failed to obtain time");
-    return;
+    tft.print(timeBuffer[i]);
   }
-  Serial.println(&timeInfo, "%A, %B %d %Y %H:%M:%S");
+
+  tft.setTextSize(2);
+  tft.setTextColor(ST77XX_GREEN, ST77XX_BLACK);
+  tft.setCursor(15, 40);
+  for (int i = 0; i < dateLength; i++)
+  {
+    tft.print(dateBuffer[i]);
+  }
+}
+
+void updateTime()
+{
+  bool success = true;
+
+  if (!debugMode)
+  {
+    // Connect to WiFi
+    tft.setTextSize(1);
+    tft.setTextColor(ST77XX_RED, ST77XX_BLACK);
+    tft.setCursor(10, 10);
+    tft.printf("Connecting to %s ", ssid);
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED)
+    {
+      delay(500);
+      Serial.print(".");
+    }
+    tft.println("WiFi connected..!");
+    tft.print("Got IP: ");
+    tft.println(WiFi.localIP());
+
+    // Initialise Time
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    struct tm timeInfo;
+    if (!getLocalTime(&timeInfo))
+    {
+      tft.println("Failed to obtain time");
+      success = false;
+    }
+
+    // Disconnect WiFi as it's no longer needed
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+  }
+
+  if (success)
+  {
+    delay(3000);
+    tft.fillScreen(ST77XX_BLACK);
+    lastTimeUpdate = millis();
+  }
 }
 
 void setup()
 {
   Serial.begin(115200);
-
-  // Connect to WiFi
-  Serial.printf("Connecting to %s ", ssid);
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("WiFi connected..!");
-  Serial.print("Got IP: ");
-  Serial.println(WiFi.localIP());
-
-  // Initialise Time
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-  printLocalTime();
-
-  // Disconnect WiFi as it's no longer needed
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
 
   // Initialise Display
   Serial.println("Initialing Display");
@@ -114,19 +147,33 @@ void setup()
   Serial.println("...Initialized");
 
   // Fill Screen
+  tft.setTextWrap(true);
+  tft.setTextSize(3);
+  tft.setRotation(1);
   tft.fillScreen(ST77XX_BLACK);
   int w = tft.width();
   int h = tft.height();
 
+  // Clear Screen
+  tft.fillScreen(ST77XX_BLACK);
+
   // Debug Output
-  Serial.print("width=");
-  Serial.println(w);
-  Serial.print("height=");
-  Serial.println(h);
+  if (debugMode)
+  {
+    Serial.print("width=");
+    Serial.println(w);
+    Serial.print("height=");
+    Serial.println(h);
+  }
 }
 
 void loop()
 {
-  writeLocalTime();
-  delay(10000);
+  if (lastTimeUpdate == 0 || millis() - lastTimeUpdate > timeUpdatePeriod)
+  {
+    updateTime();
+  }
+  updateTimeBuffer();
+  writeDisplay();
+  delay(500);
 }
