@@ -5,5 +5,8 @@
     "cSpell.words": [
       "IRAM"
     ],
+    "files.associations": {
+      "random": "cpp"
+    },
   }
   
