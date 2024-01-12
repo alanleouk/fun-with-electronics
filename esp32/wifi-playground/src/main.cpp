@@ -160,7 +160,7 @@ void setup()
   pinMode(_rgbLedPinGreen, OUTPUT);
   pinMode(_rgbLedPinBlue, OUTPUT);
 
-  // connect to WiFi
+  // Connect to WiFi
   Serial.printf("Connecting to %s ", ssid);
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED)

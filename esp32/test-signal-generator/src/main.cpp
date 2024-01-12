@@ -7,14 +7,6 @@ WebServer server(80);
 const char *ssid = "AWNet_2G_Guest";
 const char *password = "EwKTBBVFL61gR3nMjJF9ey7qoP";
 
-// Simulation
-/*
-#define timerDivider 80 // (80) timer frequency divider. timer runs at 80MHz by default.
-#define simulationTimeId 0
-hw_timer_t *simulationTimer = NULL;
-void IRAM_ATTR onSimulationTimer();
-*/
-
 // Pins
 const static int simulationResistancePin = 25;
 const static int signalPin = 26;
@@ -103,9 +95,9 @@ void setup()
     tri_wav[i] = (i > (pnt_num / 2)) ? (2 * DAC_AMPLITUDE * (pnt_num - i) / pnt_num) : (2 * DAC_AMPLITUDE * i / pnt_num);
     saw_wav[i] = (i == pnt_num) ? 0 : (i * DAC_AMPLITUDE / pnt_num);
     squ_wav[i] = (i < (pnt_num / 2)) ? DAC_AMPLITUDE : 0;
-    cad_wav[i] = 240;
+    cad_wav[i] = 255;
   }
-  cad_wav[1] = 230;
+  cad_wav[1] = 240;
   cad_wav[2] = 210;
   cad_wav[3] = 190;
   cad_wav[4] = 170;
@@ -132,19 +124,19 @@ void setup()
   cad_wav[25] = 0;
   cad_wav[26] = 0;
   cad_wav[27] = 0;
-  cad_wav[28] = 10;
-  cad_wav[29] = 30;
-  cad_wav[30] = 50;
-  cad_wav[31] = 70;
-  cad_wav[32] = 90;
-  cad_wav[33] = 110;
-  cad_wav[34] = 130;
-  cad_wav[35] = 150;
+  cad_wav[28] = 0;
+  cad_wav[29] = 10;
+  cad_wav[30] = 30;
+  cad_wav[31] = 50;
+  cad_wav[32] = 70;
+  cad_wav[33] = 90;
+  cad_wav[34] = 110;
+  cad_wav[35] = 130;
   cad_wav[36] = 150;
   cad_wav[37] = 170;
   cad_wav[38] = 190;
   cad_wav[39] = 210;
-  cad_wav[40] = 230;
+  cad_wav[40] = 240;
 
   configureWave();
 
@@ -153,14 +145,6 @@ void setup()
   server.onNotFound(handle_NotFound);
   server.begin();
   Serial.println("HTTP server started");
-
-  // Timer
-  /*
-  simulationTimer = timerBegin(simulationTimeId, timerDivider, true);
-  timerAttachInterrupt(simulationTimer, &onSimulationTimer, true);
-  timerAlarmWrite(simulationTimer, TIMER_ALARM_COUNT, true);
-  timerAlarmEnable(simulationTimer);
-  */
 
   // LED
   digitalWrite(2, HIGH);
@@ -237,19 +221,6 @@ const char *currentWaveType()
     return "cad";
   }
 }
-
-/*
-void IRAM_ATTR onSimulationTimer()
-{
-  static uint32_t previousIndex = 0;
-  uint32_t index = (esp_timer_get_time() % cycleTimeMicros) / amplitudeInverseFactor;
-  if (index != previousIndex)
-  {
-    dacWrite(signalPin, currentWaveform()[index]);
-    previousIndex = index;
-  }
-}
-*/
 
 String generateHtml()
 {
@@ -366,10 +337,11 @@ void handle_root()
 
     if (argName == "cycleTimeMicros")
     {
-      uint32_t newFrequency = argValue.toInt();
-      if (newFrequency > 0)
+      uint32_t newCycleTimeMicros = argValue.toInt();
+      if (newCycleTimeMicros > 0)
       {
-        cycleTimeMicros = newFrequency;
+        cycleTimeMicros = newCycleTimeMicros;
+        configureWave();
       }
     }
     else if (argName == "waveType")
