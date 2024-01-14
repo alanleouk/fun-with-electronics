@@ -20,7 +20,6 @@ enum WaveType
 
 #define TWO_PI 6.283185307179586476925286766559
 #define TIMER_ALARM_COUNT 1000
-#define CONST_PERIOD_2_PI 6.2832 // 2 * PI
 #define ARRAY_LEN 400
 #define DAC_AMPLITUDE 255
 #define SIGNAL_CHANNELS 2
@@ -36,14 +35,16 @@ uint8_t _squ_wav[ARRAY_LEN];
 uint8_t _cad_wav[ARRAY_LEN];
 uint8_t _max_wav[ARRAY_LEN];
 
-uint32_t _dacAmplitude = 255;
-uint64_t _cycleTimeMicros = 1000000;
-uint32_t _amplitudeInverseFactor = 0;
+uint32_t _previousWaveFormIndex[SIGNAL_CHANNELS] = {0, 0};
+const uint8_t _dacAmplitude[SIGNAL_CHANNELS] = {DAC_AMPLITUDE, DAC_AMPLITUDE};
+uint8_t _customDacAmplitude[SIGNAL_CHANNELS] = {DAC_AMPLITUDE, 80};
+uint64_t _cycleTimeMicros[SIGNAL_CHANNELS] = {1000000, 1000000};
+uint32_t _amplitudeInverseFactor[SIGNAL_CHANNELS] = {0, 0};
 uint64_t _reportTimePerWrite = 0;
 uint64_t _lastWriteTime = 0;
 
 // Methods
-void configureWave();
+void configureWaveFactor();
 void handleWaveOutput();
 uint8_t *currentWaveform(uint8_t channelIndex);
 WaveType currentWaveType(uint8_t channelIndex);
@@ -93,7 +94,7 @@ void setup()
   uint32_t pnt_num = ARRAY_LEN;
   for (int i = 0; i < pnt_num; i++)
   {
-    _sin_wav[i] = (uint8_t)((sin(i * CONST_PERIOD_2_PI / pnt_num) + 1) * (double)(DAC_AMPLITUDE) / 2 + 0.5);
+    _sin_wav[i] = (uint8_t)((sin(i * TWO_PI / pnt_num) + 1) * (double)(DAC_AMPLITUDE) / 2 + 0.5);
     _tri_wav[i] = (i > (pnt_num / 2)) ? (2 * DAC_AMPLITUDE * (pnt_num - i) / pnt_num) : (2 * DAC_AMPLITUDE * i / pnt_num);
     _saw_wav[i] = (i == pnt_num) ? 0 : (i * DAC_AMPLITUDE / pnt_num);
     _squ_wav[i] = (i < (pnt_num / 2)) ? DAC_AMPLITUDE : 0;
@@ -141,7 +142,7 @@ void setup()
   _cad_wav[39] = 210;
   _cad_wav[40] = 240;
 
-  configureWave();
+  configureWaveFactor();
 
   // Web Server
   server.on("/", handle_root);
@@ -155,16 +156,25 @@ void setup()
 
 void handleWaveOutput()
 {
-  static uint32_t previousWaveFormIndex = 0;
-  uint32_t waveFormIndex = (esp_timer_get_time() % _cycleTimeMicros) / _amplitudeInverseFactor;
-  if (waveFormIndex != previousWaveFormIndex)
+  for (uint8_t channelIndex = 0; channelIndex < SIGNAL_CHANNELS; channelIndex++)
   {
-    for (uint8_t channelIndex = 0; channelIndex < SIGNAL_CHANNELS; channelIndex++)
+    uint32_t waveFormIndex = (esp_timer_get_time() % _cycleTimeMicros[channelIndex]) / _amplitudeInverseFactor[channelIndex];
+    if (waveFormIndex != _previousWaveFormIndex[channelIndex])
     {
-      dacWrite(_signalPin[channelIndex], currentWaveform(channelIndex)[waveFormIndex]);
-    }
+      uint32_t waveFormIndex = (esp_timer_get_time() % _cycleTimeMicros[channelIndex]) / _amplitudeInverseFactor[channelIndex];
 
-    previousWaveFormIndex = waveFormIndex;
+      if (_customDacAmplitude[channelIndex] == _dacAmplitude[channelIndex])
+      {
+        dacWrite(_signalPin[channelIndex], currentWaveform(channelIndex)[waveFormIndex]);
+      }
+      else
+      {
+        uint8_t waveFormValue = currentWaveform(channelIndex)[waveFormIndex] * (static_cast<float>(_customDacAmplitude[channelIndex]) / _dacAmplitude[channelIndex]);
+        dacWrite(_signalPin[channelIndex], waveFormValue);
+      }
+
+      _previousWaveFormIndex[channelIndex] = waveFormIndex;
+    }
   }
 
   if (_lastWriteTime > 0)
@@ -180,9 +190,12 @@ void loop()
   handleWaveOutput();
 }
 
-void configureWave()
+void configureWaveFactor()
 {
-  _amplitudeInverseFactor = _cycleTimeMicros / ARRAY_LEN;
+  for (uint8_t channelIndex = 0; channelIndex < SIGNAL_CHANNELS; channelIndex++)
+  {
+    _amplitudeInverseFactor[channelIndex] = _cycleTimeMicros[channelIndex] / ARRAY_LEN;
+  }
 }
 
 uint8_t *currentWaveform(uint8_t channelIndex)
@@ -262,12 +275,21 @@ void appendHeader(String &ptr, uint8_t channelIndex)
   ptr += "<script src=\"http://ajax.aspnetcdn.com/ajax/jQuery/jquery-1.6.1.min.js\"></script>\n";
   ptr += "<script>\n";
   ptr += "var graph,xPadding=30,yPadding=30,data={values:[";
-  for (int i = 0; i < ARRAY_LEN; i++)
+  for (int waveFormIndex = 0; waveFormIndex < ARRAY_LEN; waveFormIndex++)
   {
     char buffer[50];
-    sprintf(buffer, "{X:%d,Y:%d},", i, currentWaveform(channelIndex)[i]);
+    if (_customDacAmplitude[channelIndex] == _dacAmplitude[channelIndex])
+    {
+      sprintf(buffer, "{X:%d,Y:%d},", waveFormIndex, currentWaveform(channelIndex)[waveFormIndex]);
+    }
+    else
+    {
+      uint8_t waveFormValue = currentWaveform(channelIndex)[waveFormIndex] * (static_cast<float>(_customDacAmplitude[channelIndex]) / _dacAmplitude[channelIndex]);
+      sprintf(buffer, "{X:%d,Y:%d},", waveFormIndex, waveFormValue);
+    }
     ptr += buffer;
   }
+
   ptr += "]};function getMaxY(){for(var e=0,t=0;t<data.values.length;t++)data.values[t].Y>e&&(e=data.values[t].Y);return e+=10-e%10}function getXPixel(e){return(graph.width()-xPadding)/data.values.length*e+1.5*xPadding}function getYPixel(e){return graph.height()-(graph.height()-yPadding)/getMaxY()*e-yPadding}$(document).ready(function(){var e=(graph=$(\"#graph\"))[0].getContext(\"2d\");e.lineWidth=2,e.strokeStyle=\"#333\",e.font=\"italic 8pt sans-serif\",e.textAlign=\"center\",e.beginPath(),e.moveTo(xPadding,0),e.lineTo(xPadding,graph.height()-yPadding),e.lineTo(graph.width(),graph.height()-yPadding),e.stroke(),e.textAlign=\"right\",e.textBaseline=\"middle\";for(var t=0;t<getMaxY();t+=10)e.fillText(t,xPadding-10,getYPixel(t));e.strokeStyle=\"#f00\",e.beginPath(),e.moveTo(getXPixel(0),getYPixel(data.values[0].Y));for(t=1;t<data.values.length;t++)e.lineTo(getXPixel(t),getYPixel(data.values[t].Y));e.stroke()});\n";
   ptr += "</script>\n";
   ptr += "</head>\n";
@@ -284,7 +306,7 @@ void appendLink(String &ptr, uint8_t channelIndex, WaveType waveType, uint64_t c
 {
   if (cycleTimeMicros == 0)
   {
-    cycleTimeMicros = _cycleTimeMicros;
+    cycleTimeMicros = _cycleTimeMicros[channelIndex];
   }
 
   if (divWrap)
@@ -317,13 +339,13 @@ String generateHtml(uint8_t channelIndex)
 
   // Channel Links
   ptr += "<h3>Frequency Links</h3>\n";
-  appendLink(ptr, 0, _waveType[0], _cycleTimeMicros, "Channel 1", true);
-  appendLink(ptr, 1, _waveType[1], _cycleTimeMicros, "Channel 2", true);
+  appendLink(ptr, 0, _waveType[0], _cycleTimeMicros[channelIndex], "Channel 1", true);
+  appendLink(ptr, 1, _waveType[1], _cycleTimeMicros[channelIndex], "Channel 2", true);
 
   // Frequency Links
   ptr += "<h3>Frequency Links</h3>\n";
-  appendLink(ptr, channelIndex, currentWaveType(channelIndex), (_cycleTimeMicros * 2), "Half", true);
-  appendLink(ptr, channelIndex, currentWaveType(channelIndex), (_cycleTimeMicros / 2), "Double", true);
+  appendLink(ptr, channelIndex, currentWaveType(channelIndex), (_cycleTimeMicros[channelIndex] * 2), "Half", true);
+  appendLink(ptr, channelIndex, currentWaveType(channelIndex), (_cycleTimeMicros[channelIndex] / 2), "Double", true);
 
   // Settings
 
@@ -341,31 +363,41 @@ String generateHtml(uint8_t channelIndex)
   ptr += std::to_string(_signalPin[channelIndex]).c_str();
   ptr += "</div>\n";
 
-  ptr += "<div>Time per write (micros): \n";
-  ptr += std::to_string(_reportTimePerWrite).c_str();
-  ptr += "</div>\n";
+  if (_waveType[channelIndex] != WaveType::Max)
+  {
+    ptr += "<div>Time per write (micros): \n";
+    ptr += std::to_string(_reportTimePerWrite).c_str();
+    ptr += "</div>\n";
 
-  ptr += "<div>Wave Time (microseconds): \n";
-  ptr += std::to_string(_cycleTimeMicros).c_str();
-  ptr += "</div>\n";
+    ptr += "<div>Wave Time (microseconds): \n";
+    ptr += std::to_string(_cycleTimeMicros[channelIndex]).c_str();
+    ptr += "</div>\n";
 
-  ptr += "<div>Frequency (Hz): \n";
-  ptr += std::to_string(1000000.0F / _cycleTimeMicros).c_str();
-  ptr += "</div>\n";
+    ptr += "<div>Frequency (Hz): \n";
+    ptr += std::to_string(1000000.0F / _cycleTimeMicros[channelIndex]).c_str();
+    ptr += "</div>\n";
 
-  ptr += "<div>Frequency (cpm): \n";
-  ptr += std::to_string(1000000.0F * 60.0 / _cycleTimeMicros).c_str();
-  ptr += "</div>\n";
+    ptr += "<div>Frequency (cpm): \n";
+    ptr += std::to_string(1000000.0F * 60.0 / _cycleTimeMicros[channelIndex]).c_str();
+    ptr += "</div>\n";
+  }
+
+  if (_customDacAmplitude[channelIndex] != _dacAmplitude[channelIndex])
+  {
+    ptr += "<div>Custom Amplitude: \n";
+    ptr += std::to_string(_customDacAmplitude[channelIndex]).c_str();
+    ptr += "</div>\n";
+  }
 
   // Wave Links
 
   ptr += "<h3>Wave Links</h3>\n";
-  appendLink(ptr, channelIndex, WaveType::Sin, _cycleTimeMicros, "Sine Wave", true);
-  appendLink(ptr, channelIndex, WaveType::Square, _cycleTimeMicros, "Square Wave", true);
-  appendLink(ptr, channelIndex, WaveType::Triangle, _cycleTimeMicros, "Triangle Wave", true);
-  appendLink(ptr, channelIndex, WaveType::Sawtooth, _cycleTimeMicros, "Sawtooth Wave", true);
-  appendLink(ptr, channelIndex, WaveType::Cadence, _cycleTimeMicros, "Cadence Wave", true);
-  appendLink(ptr, channelIndex, WaveType::Max, _cycleTimeMicros, "Max Wave", true);
+  appendLink(ptr, channelIndex, WaveType::Sin, _cycleTimeMicros[channelIndex], "Sine Wave", true);
+  appendLink(ptr, channelIndex, WaveType::Square, _cycleTimeMicros[channelIndex], "Square Wave", true);
+  appendLink(ptr, channelIndex, WaveType::Triangle, _cycleTimeMicros[channelIndex], "Triangle Wave", true);
+  appendLink(ptr, channelIndex, WaveType::Sawtooth, _cycleTimeMicros[channelIndex], "Sawtooth Wave", true);
+  appendLink(ptr, channelIndex, WaveType::Cadence, _cycleTimeMicros[channelIndex], "Cadence Wave", true);
+  appendLink(ptr, channelIndex, WaveType::Max, _cycleTimeMicros[channelIndex], "Max Wave", true);
 
   // Chart Canvas
 
@@ -401,8 +433,16 @@ void handle_root()
       uint32_t newCycleTimeMicros = argValue.toInt();
       if (newCycleTimeMicros > 0)
       {
-        _cycleTimeMicros = newCycleTimeMicros;
-        configureWave();
+        _cycleTimeMicros[channelIndex] = newCycleTimeMicros;
+        configureWaveFactor();
+      }
+    }
+    else if (argName == "customDacAmplitude")
+    {
+      uint32_t newCustomDacAmplitude = argValue.toInt();
+      if (newCustomDacAmplitude > 0)
+      {
+        _customDacAmplitude[channelIndex] = newCustomDacAmplitude;
       }
     }
     else if (argName == "waveType")
