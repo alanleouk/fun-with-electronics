@@ -1,0 +1,19 @@
+{
+    "files.exclude": {
+      "**/.git": true,
+      "**/.svn": true,
+      "**/.hg": true,
+      "**/CVS": true,
+      "**/.DS_Store": true,
+      "**/node_modules": true,
+      "**/dist": true,
+      "**/dist-demo": true,
+      "**/dist-dev": true,
+      "**/coverage": true,
+    },
+  
+    "[cpp]": {
+      "editor.formatOnSave": true,
+    },
+  }
+  
