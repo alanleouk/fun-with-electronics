@@ -6,20 +6,41 @@
 #define BLE_DEVICE_NAME "Midi BLE"
 #define MIDI_SERVICE_UUID BLEUUID("03B80E5A-EDE8-4B33-A751-6CE34EC4C700")
 #define MIDI_CHARACTERISTIC_UUID BLEUUID("7772E5DB-3868-4112-A1A9-F2669D106BF3")
-#define PEDAL_COUNT 4
+#define PEDAL_COUNT 2
+#define MIDI_MIN 0
+#define MIDI_MAX 127
+#define MAX_ANALOG_VALUE 4095
+#define CHANGE_MARGIN 2
+
+struct PedalInfo
+{
+  int gpioPin;
+  uint16_t rawValue;
+  uint16_t rawValueMin;
+  uint16_t rawValueMax;
+  uint8_t currentValue;
+  uint8_t previousValue;
+  uint8_t controlChangeNumber;
+  bool invert;
+};
 
 // Debug Constants
-const static bool debugMode = true;
+const static bool debugMode = false;
 const static bool debugPedals = true;
-const static bool debugQueue = false;
-
-// Pins
-const static int resistancePin = 34;
 
 // Pedals
-uint8_t _pedalValuesCurrent[PEDAL_COUNT] = {0, 0, 0, 0};
-uint8_t _pedalValuesPrev[PEDAL_COUNT] = {0, 0, 0, 0};
-uint8_t _pedalController[PEDAL_COUNT] = {64, 64, 64, 64};
+PedalInfo _pedals[PEDAL_COUNT] = {
+    {
+      gpioPin : 34,
+      controlChangeNumber : 64,
+      invert : false
+    },
+    {
+      gpioPin : 35,
+      controlChangeNumber : 65,
+      invert : false
+    },
+};
 
 // Bluetooth
 BLEServer *p_bleServer;
@@ -60,13 +81,20 @@ void process();
 void setup()
 {
   // Analog
+  analogSetAttenuation(ADC_11db);
   analogReadResolution(12);
 
   // Communication
   Serial.begin(115200);
 
+  // Reset
+  reset();
+
   // Pin Modes
-  pinMode(resistancePin, ANALOG);
+  for (size_t i = 0; i < PEDAL_COUNT; i++)
+  {
+    pinMode(_pedals[i].gpioPin, ANALOG);
+  }
 
   // Bluetooth
   BLEDevice::init(BLE_DEVICE_NAME);
@@ -81,9 +109,9 @@ void setup()
   midiCharacteristic.addDescriptor(new BLE2902());
 
   // Midi Buffer
-  _midiBuffer[0] = 0;
-  _midiBuffer[1] = 0;
-  _midiBuffer[2] = 0;
+  _midiBuffer[0] = 0x80;
+  _midiBuffer[1] = 0x80;
+  _midiBuffer[2] = 0xB0;
   _midiBuffer[3] = 0;
   _midiBuffer[4] = 0;
 
@@ -116,27 +144,22 @@ void loop()
   // Debug
   if (debugMode)
   {
-    if (debugPedals)
-    {
-
-      for (size_t i = 0; i < PEDAL_COUNT; i++)
-      {
-        Serial.printf("Pedal %u: ", i);
-        Serial.println(_pedalValuesCurrent[i]);
-        _pedalValuesCurrent[i]++;
-      }
-    }
-
     delay(2000);
   }
+
+  vTaskDelay(500 / (portTICK_PERIOD_MS * 1000)); // Nanoseconds
 }
 
 void reset()
 {
   for (size_t i = 0; i < PEDAL_COUNT; i++)
   {
-    _pedalValuesCurrent[i] = 0;
-    _pedalValuesPrev[i] = 0;
+    PedalInfo *pedal = &_pedals[i];
+    pedal->rawValue = 0;
+    pedal->rawValueMin = (MAX_ANALOG_VALUE / 2) - 1;
+    pedal->rawValueMax = (MAX_ANALOG_VALUE / 2) + 1;
+    pedal->currentValue = MIDI_MIN;
+    pedal->previousValue = MIDI_MIN;
   }
 }
 
@@ -146,18 +169,42 @@ void process()
 
   for (size_t i = 0; i < PEDAL_COUNT; i++)
   {
-    if (_pedalValuesCurrent[i] != _pedalValuesPrev[i])
-    {
-      _pedalValuesPrev[i] = _pedalValuesCurrent[i];
+    PedalInfo *pedal = &_pedals[i];
 
-      _midiBuffer[0] = 0x80;
-      _midiBuffer[1] = 0x80;
-      _midiBuffer[2] = 0x0B;
-      _midiBuffer[3] = _pedalController[i];
-      _midiBuffer[4] = _pedalValuesCurrent[i];
+    // Raw Value
+    pedal->rawValue = analogRead(pedal->gpioPin);
+
+    // Calibration
+    if (pedal->rawValueMin > pedal->rawValue)
+    {
+      pedal->rawValueMin = pedal->rawValue;
+    }
+    if (pedal->rawValueMax < pedal->rawValue)
+    {
+      pedal->rawValueMax = pedal->rawValue;
+    }
+
+    // Value
+    pedal->currentValue = map(pedal->rawValue, pedal->rawValueMin, pedal->rawValueMax, MIDI_MIN, MIDI_MAX);
+
+    if (abs(pedal->currentValue - pedal->previousValue) > CHANGE_MARGIN)
+    {
+      pedal->previousValue = pedal->currentValue;
+
+      _midiBuffer[3] = pedal->controlChangeNumber;
+      _midiBuffer[4] = pedal->invert ? MIDI_MAX - pedal->currentValue : pedal->currentValue;
 
       midiCharacteristic.setValue(_midiBuffer, _midiBufferLength);
       midiCharacteristic.notify();
+
+      // Debug
+      if (debugMode)
+      {
+        if (debugPedals)
+        {
+          Serial.printf("Pedal %u: GPIO = %u; Raw = %u; Current = %u;\r\n", i, pedal->gpioPin, pedal->rawValue, pedal->currentValue);
+        }
+      }
     }
   }
 }
